@@ -229,6 +229,11 @@ to read before producing progress events.
 The default permission policy is `balanced`. The SDK and TUI backends have
 different safety boundaries.
 
+`maxBudgetUsd` is an optional per-turn SDK stop-loss override. It is not stored
+as sticky project state. For normal Claude Max/subscription workflows, omit it
+and rely on `maxRuntimeMs`, `stallTimeoutMs`, visible TUI monitoring, and manual
+`C-c` stop-loss instead.
+
 For the SDK backend, cc-in-codex uses the Claude Agent SDK permission callback:
 
 - read-only mode denies mutating Claude Code tools.

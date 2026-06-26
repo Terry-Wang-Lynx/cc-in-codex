@@ -49,6 +49,10 @@ interface RunHandle {
   stallTimer?: ReturnType<typeof setInterval>;
 }
 
+interface TurnOverrides {
+  maxBudgetUsd?: number;
+}
+
 type CompanionInput = Partial<CompanionConfig> & {
   cwd?: string;
   sessionId?: string;
@@ -338,7 +342,9 @@ export async function startCompanionRun(
   );
   current = await updateRecord(current);
 
-  const promise = runCompanionTurn(current, prompt, runId, abortController);
+  const promise = runCompanionTurn(current, prompt, runId, abortController, {
+    maxBudgetUsd: input?.maxBudgetUsd,
+  });
   const handle: RunHandle = {
     runId,
     cwd: current.cwd,
@@ -721,6 +727,7 @@ async function runCompanionTurn(
   prompt: string,
   runId: string,
   abortController: AbortController,
+  turnOverrides: TurnOverrides = {},
 ): Promise<SendResult> {
   let current = initialRecord;
   let finalResult = "";
@@ -728,7 +735,7 @@ async function runCompanionTurn(
   let turns: number | undefined;
 
   const canUseTool = buildPermissionHandler(current);
-  const options = buildOptions(current, abortController, canUseTool);
+  const options = buildOptions(current, abortController, canUseTool, turnOverrides);
 
   try {
     for await (const message of query({ prompt: buildPrompt(prompt, current), options })) {
@@ -794,6 +801,7 @@ function buildOptions(
   record: CompanionRecord,
   abortController: AbortController,
   canUseTool: CanUseTool,
+  turnOverrides: TurnOverrides = {},
 ): Options {
   const claudePath = record.claudePath ?? detectLocalClaudePath();
   return {
@@ -813,7 +821,7 @@ function buildOptions(
     model: record.model,
     effort: record.effort,
     maxTurns: record.maxTurns,
-    maxBudgetUsd: record.maxBudgetUsd,
+    maxBudgetUsd: turnOverrides.maxBudgetUsd,
     pathToClaudeCodeExecutable: claudePath,
     persistSession: true,
     settingSources: ["user", "project", "local"],
@@ -1057,6 +1065,10 @@ function stopRun(cwd: string, reason: string): void {
 }
 
 async function reconcileRecord(record: CompanionRecord): Promise<CompanionRecord> {
+  if (record.maxBudgetUsd !== undefined) {
+    record = await updateRecord({ ...record, maxBudgetUsd: undefined });
+  }
+
   if (!record.backend) {
     record = await updateRecord({ ...record, backend: "sdk" });
   }

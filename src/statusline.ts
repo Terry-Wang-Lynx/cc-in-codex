@@ -60,7 +60,7 @@ export async function runStatuslineCommand(): Promise<void> {
 
 export async function loadStatuslineSnapshot(
   cwd?: string,
-  maxAgeMs = 5 * 60 * 1000,
+  maxAgeMs = 30 * 60 * 1000,
 ): Promise<(StatuslineSnapshot & { ageMs: number }) | undefined> {
   const path = statuslineSnapshotPath(normalizeCwd(cwd));
   try {

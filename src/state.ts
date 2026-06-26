@@ -60,7 +60,8 @@ export function defaultConfig(input?: Partial<CompanionConfig> & { cwd?: string 
     model: input?.model,
     effort: input?.effort ?? "high",
     maxTurns: input?.maxTurns ?? 30,
-    maxBudgetUsd: input?.maxBudgetUsd,
+    // maxBudgetUsd is a per-turn SDK stop-loss override, not sticky project state.
+    maxBudgetUsd: undefined,
     maxRuntimeMs: input?.maxRuntimeMs ?? DEFAULT_MAX_RUNTIME_MS,
     stallTimeoutMs: input?.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS,
     claudePath: input?.claudePath,
@@ -144,7 +145,7 @@ export async function ensureRecord(
       model: input?.model ?? existing.model,
       effort: input?.effort ?? existing.effort,
       maxTurns: input?.maxTurns ?? existing.maxTurns ?? config.maxTurns,
-      maxBudgetUsd: input?.maxBudgetUsd ?? existing.maxBudgetUsd,
+      maxBudgetUsd: undefined,
       maxRuntimeMs: input?.maxRuntimeMs ?? existing.maxRuntimeMs ?? config.maxRuntimeMs,
       stallTimeoutMs: input?.stallTimeoutMs ?? existing.stallTimeoutMs ?? config.stallTimeoutMs,
       claudePath: input?.claudePath ?? existing.claudePath,

@@ -2,13 +2,16 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resetCompanion, resumeCompanion } from "../dist/manager.js";
+import { openCompanion, resetCompanion, resumeCompanion } from "../dist/manager.js";
+import { loadStatuslineSnapshot } from "../dist/statusline.js";
 
 const root = new URL("..", import.meta.url);
 const distIndex = new URL("../dist/index.js", import.meta.url);
 
 await assertMcpTools();
 await assertSdkResumeBinding();
+await assertBudgetCapIsPerTurn();
+await assertStatuslineSnapshot();
 assertAttachHelp();
 
 console.log("cc-in-codex smoke ok");
@@ -97,6 +100,57 @@ async function assertSdkResumeBinding() {
     if (!record.resumeCommand?.includes(sessionId)) throw new Error("SDK resume command missing sessionId.");
   } finally {
     await resetCompanion(cwd);
+    await rm(cwd, { recursive: true, force: true });
+  }
+}
+
+async function assertBudgetCapIsPerTurn() {
+  const cwd = await mkdtemp(join(tmpdir(), "ccic-budget-"));
+  try {
+    const first = await openCompanion({ cwd, backend: "sdk", maxBudgetUsd: 1 });
+    const second = await openCompanion({ cwd, backend: "sdk" });
+    if (first.maxBudgetUsd !== undefined || second.maxBudgetUsd !== undefined) {
+      throw new Error("maxBudgetUsd should not persist as project state.");
+    }
+  } finally {
+    await resetCompanion(cwd);
+    await rm(cwd, { recursive: true, force: true });
+  }
+}
+
+async function assertStatuslineSnapshot() {
+  const cwd = await mkdtemp(join(tmpdir(), "ccic-statusline-"));
+  try {
+    const input = {
+      session_id: "00000000-0000-0000-0000-000000000001",
+      model: { id: "claude-test", display_name: "Claude Test" },
+      workspace: { project_dir: cwd },
+      context_window: {
+        context_window_size: 1000,
+        used_percentage: 42,
+        remaining_percentage: 58,
+        total_input_tokens: 420,
+        total_output_tokens: 12,
+        current_usage: {
+          input_tokens: 10,
+          cache_creation_input_tokens: 20,
+          cache_read_input_tokens: 390,
+        },
+      },
+    };
+    const result = spawnSync(process.execPath, [distIndex.pathname, "statusline"], {
+      cwd: root.pathname,
+      input: JSON.stringify(input),
+      encoding: "utf8",
+    });
+    if (result.status !== 0) throw new Error(result.stderr || "statusline command failed.");
+    if (!result.stdout.includes("ctx 42.0% used")) throw new Error("statusline output missing context usage.");
+
+    const snapshot = await loadStatuslineSnapshot(cwd);
+    if (snapshot?.contextWindow?.usedPercentage !== 42) {
+      throw new Error("statusline snapshot was not written or loaded.");
+    }
+  } finally {
     await rm(cwd, { recursive: true, force: true });
   }
 }

@@ -547,6 +547,8 @@ Claude Code 支持 statusLine。配置后，Claude Code 会把包含 `context_wi
 
 SDK 后端通过 Claude Agent SDK 的工具许可回调做拦截，因此可以执行较强的工具级策略。TUI 后端运行的是原生 Claude Code CLI，`cc-in-codex` 负责可见启动、发送 prompt、发送 raw key、读取屏幕和打断，但不能在 MCP 层对 TUI 内部每一次工具调用做同等级别的路径拦截。
 
+`maxBudgetUsd` 是 SDK 单轮调用的可选止损参数，不会作为项目默认配置持久化。Claude Max/subscription 的正常个人工作流建议省略它，主要依靠 `maxRuntimeMs`、`stallTimeoutMs`、TUI 可见监控和人工 `C-c` 止损。
+
 ### mode
 
 | mode | 含义 |
