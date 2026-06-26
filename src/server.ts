@@ -5,6 +5,7 @@ import {
   companionRecent,
   companionResult,
   companionStatus,
+  companionWait,
   companionTuiCompactCheck,
   companionTuiCompact,
   companionTuiRaw,
@@ -20,7 +21,7 @@ import { DEFAULT_ALLOWED_TOOLS, READ_ONLY_TOOLS } from "./state.js";
 
 const modeSchema = z.enum(["read-only", "workspace-write"]).optional();
 const backendSchema = z.enum(["sdk", "tui"]).optional();
-const permissionPolicySchema = z.enum(["balanced", "trusted", "strict"]).optional();
+const permissionPolicySchema = z.enum(["balanced", "trusted", "strict", "bypass"]).optional();
 const effortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]).optional();
 
 const configShape = {
@@ -33,7 +34,7 @@ const configShape = {
     "SDK backend: read-only denies mutating tools; workspace-write may edit files. TUI backend receives this as visible companion context and still relies on Claude Code CLI/user supervision.",
   ),
   permissionPolicy: permissionPolicySchema.describe(
-    "SDK backend policy: balanced allows local project work and blocks detected out-of-cwd paths; trusted allows all non-disallowed tools; strict allows only allowedTools. TUI backend is human-visible and cannot enforce the same path-level MCP guardrails.",
+    "SDK backend policy: balanced allows local project work and blocks detected out-of-cwd paths; trusted allows all non-disallowed tools; strict allows only allowedTools; bypass uses Claude Code bypassPermissions. TUI bypass starts Claude Code with --dangerously-skip-permissions, but existing TUI panes must be recreated for launch flags to change.",
   ),
   model: z.string().optional().describe("Optional Claude model override. Omit to use Claude Code defaults."),
   effort: effortSchema.describe("Optional Claude effort override. Defaults to high."),
@@ -92,6 +93,7 @@ export function createServer(): McpServer {
         "You are Codex, the lead agent. Use this MCP server when Claude Code should act as your persistent coding companion.",
         "For the same project cwd, use the existing companion. The server automatically resumes the existing Claude Code session.",
         "Use companion_start for long coding work, companion_recent/status to monitor, companion_cancel to stop loss, and companion_result to collect final output.",
+        "After companion_start, use companion_wait with the returned eventCursor to return as soon as Claude Code emits progress instead of waiting for the whole task.",
         "Use companion_resume to bind an existing Claude Code session id, or to start the visible TUI with `claude --continue` for an existing project conversation.",
         "Use companion_tui_open and companion_tui_send when the user wants a visible native Claude Code TUI that Codex can drive and the user can attach to.",
         "Use companion_tui_raw for slash commands or control keys (e.g. /clear, C-c) in that TUI, and companion_tui_screen to read what the user sees.",
@@ -284,6 +286,32 @@ export function createServer(): McpServer {
   );
 
   server.registerTool(
+    "companion_wait",
+    {
+      title: "Wait For Companion Progress",
+      description:
+        "Wait until the companion emits events after sinceCursor, finishes, or timeoutMs elapses. Use after companion_start for smoother progress updates.",
+      inputSchema: {
+        cwd: z.string().optional(),
+        sinceCursor: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("Only return events with id >= sinceCursor. companion_start returns eventCursor for this."),
+        timeoutMs: z
+          .number()
+          .int()
+          .positive()
+          .max(300000)
+          .optional()
+          .describe("How long to wait for new progress. Defaults to 60000 ms; max 300000 ms."),
+      },
+    },
+    async (input) => jsonResult(await companionWait(input)),
+  );
+
+  server.registerTool(
     "companion_recent",
     {
       title: "Recent Companion Context",
@@ -378,6 +406,7 @@ export function createServer(): McpServer {
             {
               defaultMode: "workspace-write",
               defaultPermissionPolicy: "balanced",
+              availablePermissionPolicies: ["balanced", "trusted", "strict", "bypass"],
               readOnlyTools: READ_ONLY_TOOLS,
               workspaceWriteTools: DEFAULT_ALLOWED_TOOLS,
               rule: "Codex leads; Claude Code executes as a persistent local companion per cwd using the local Claude Code login.",

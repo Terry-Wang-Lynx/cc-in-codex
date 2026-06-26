@@ -34,6 +34,7 @@ binary and your existing Claude Code login. It does not require a new API key.
 - `companion_open`: create or restore a project companion.
 - `companion_resume`: bind cc-in-codex to an existing Claude Code session id, or start TUI resume.
 - `companion_start`: start a background Claude Code run.
+- `companion_wait`: wait for new progress after `companion_start` instead of waiting for the whole task.
 - `companion_send`: send a short task and wait for completion.
 - `companion_tui_open`: create or restore a visible native Claude Code CLI in `tmux`.
 - `companion_tui_resume`: launch visible TUI with `claude --resume <session-id>` or `claude --continue`.
@@ -190,6 +191,10 @@ clearly if none is open. Sending `/clear` marks the pane as needing bootstrap
 again, so the next task re-primes Claude Code with the companion contract. Raw
 `/compact` has the same bootstrap reset behavior.
 
+Long task prompts and longer raw inputs are pasted through a tmux buffer and use
+a length-based delay before pressing Enter. This is more reliable than direct
+key injection for long commands, long slash commands, or multi-line task briefs.
+
 ### Compacting context
 
 Compacting is a checkpoint decision, not a reflex. Codex should first run
@@ -241,6 +246,8 @@ For the SDK backend, cc-in-codex uses the Claude Agent SDK permission callback:
 - `balanced` denies detected paths outside the companion `cwd`.
 - `strict` mode only allows explicit `allowedTools`.
 - `trusted` mode relies on Claude Code and the local environment.
+- `bypass` explicitly skips Claude Code permission prompts. The SDK backend uses
+  `bypassPermissions`; a newly launched TUI uses `--dangerously-skip-permissions`.
 
 The TUI backend is intentionally human-visible and conservative. It sends prompts
 and raw keys, but it does not claim to know task completion from a full-screen
@@ -249,6 +256,9 @@ native Claude Code CLI. TUI safety comes from visibility, Claude Code CLI
 permissions, project settings, user confirmation, and explicit stop-loss actions
 such as sending `C-c`. Codex remains responsible for monitoring and reviewing
 results.
+
+Existing TUI panes cannot change their launch permission flags. To use `bypass`
+in TUI mode, create a fresh pane or resume with `replaceTui:true`.
 
 ### Limitations
 

@@ -22,6 +22,7 @@ async function assertMcpTools() {
     "companion_open",
     "companion_resume",
     "companion_send",
+    "companion_wait",
     "companion_tui_open",
     "companion_tui_resume",
     "companion_tui_send",

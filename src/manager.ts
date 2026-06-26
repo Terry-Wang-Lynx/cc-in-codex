@@ -92,6 +92,17 @@ interface CompactCheckResult {
   caveat: string;
 }
 
+interface CompanionWaitResult {
+  cwd: string;
+  status?: string;
+  timedOut: boolean;
+  eventCursor: number;
+  events: CompanionEvent[];
+  activeRun?: CompanionRecord["activeRun"];
+  lastResult?: CompanionRecord["lastResult"];
+  nextAction: string;
+}
+
 const running = new Map<string, RunHandle>();
 
 export async function openCompanion(
@@ -123,6 +134,64 @@ export async function companionRecent(cwd?: string, limit = 20): Promise<Compani
 
 export async function companionResult(cwd?: string): Promise<CompanionRecord | undefined> {
   return companionStatus(cwd);
+}
+
+export async function companionWait(input: {
+  cwd?: string;
+  sinceCursor?: number;
+  timeoutMs?: number;
+}): Promise<CompanionWaitResult> {
+  const cwd = normalizeCwd(input.cwd);
+  const timeoutMs = Math.max(1000, Math.min(input.timeoutMs ?? 60_000, 5 * 60_000));
+  let sinceCursor = input.sinceCursor;
+  if (sinceCursor === undefined) {
+    sinceCursor = (await getRecord(cwd))?.cursor ?? 0;
+  }
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const record = await getRecord(cwd);
+    if (!record) {
+      return {
+        cwd,
+        timedOut: false,
+        eventCursor: sinceCursor,
+        events: [],
+        nextAction: "No companion exists for this cwd. Open or start a companion first.",
+      };
+    }
+
+    const current = await reconcileRecord(record);
+    const events = current.events.filter((event) => event.id >= sinceCursor).map(publicEvent);
+    if (events.length > 0 || current.status !== "running") {
+      return {
+        cwd: current.cwd,
+        status: current.status,
+        timedOut: false,
+        eventCursor: current.cursor,
+        events,
+        activeRun: current.activeRun,
+        lastResult: current.lastResult,
+        nextAction: current.status === "running"
+          ? "New companion events are available; inspect them and continue waiting if needed."
+          : "The companion is not running; inspect lastResult before deciding the next action.",
+      };
+    }
+
+    await sleep(1000);
+  }
+
+  const record = await getRecord(cwd);
+  return {
+    cwd,
+    status: record?.status,
+    timedOut: true,
+    eventCursor: record?.cursor ?? sinceCursor,
+    events: record?.events.filter((event) => event.id >= sinceCursor).map(publicEvent) ?? [],
+    activeRun: record?.activeRun,
+    lastResult: record?.lastResult,
+    nextAction: "No new companion events arrived before timeout. Continue waiting, inspect status, or cancel if this looks stuck.",
+  };
 }
 
 export async function resumeCompanion(input: CompanionResumeInput): Promise<CompanionRecord> {
@@ -312,6 +381,7 @@ export async function startCompanionRun(
       status: "running",
       startedAt: current.activeRun?.startedAt ?? new Date().toISOString(),
       deadlineAt: current.activeRun?.deadlineAt,
+      eventCursor: current.cursor,
     };
   }
 
@@ -370,6 +440,7 @@ export async function startCompanionRun(
     status: "running",
     startedAt: now.toISOString(),
     deadlineAt,
+    eventCursor: current.cursor,
   };
 }
 
@@ -402,6 +473,7 @@ async function prepareExplicitTuiRecord(input: CompanionInput): Promise<{
     cwd,
     sessionId: existing?.sessionId,
     continueLatest: input.continueLatest,
+    dangerouslySkipPermissions: input.permissionPolicy === "bypass" || existing?.permissionPolicy === "bypass",
     claudePath: input.claudePath ?? existing?.claudePath ?? detectLocalClaudePath(),
     tmuxSessionName: input.tmuxSessionName ?? existing?.tmuxSessionName,
   });
@@ -437,6 +509,7 @@ async function resumeTuiCompanion(input: CompanionResumeInput, cwd: string): Pro
     cwd,
     sessionId: input.sessionId,
     continueLatest: input.continueLatest,
+    dangerouslySkipPermissions: input.permissionPolicy === "bypass" || existing?.permissionPolicy === "bypass",
     claudePath: input.claudePath ?? existing?.claudePath ?? detectLocalClaudePath(),
     tmuxSessionName,
   });
@@ -514,6 +587,7 @@ async function sendTuiCompanionPrompt(
     prompt: payload,
     sessionId: record.sessionId,
     continueLatest: record.sessionId ? false : undefined,
+    dangerouslySkipPermissions: record.permissionPolicy === "bypass",
     claudePath: record.claudePath ?? detectLocalClaudePath(),
     tmuxSessionName: session?.tmuxSessionName ?? record.tmuxSessionName,
   });
@@ -815,7 +889,12 @@ function buildOptions(
       preset: "claude_code",
       append: buildSystemAppend(),
     },
-    permissionMode: record.mode === "read-only" ? "dontAsk" : "acceptEdits",
+    permissionMode: record.permissionPolicy === "bypass"
+      ? "bypassPermissions"
+      : record.mode === "read-only"
+        ? "dontAsk"
+        : "acceptEdits",
+    allowDangerouslySkipPermissions: record.permissionPolicy === "bypass" ? true : undefined,
     allowedTools: record.permissionPolicy === "strict" ? record.allowedTools : undefined,
     disallowedTools: record.disallowedTools,
     model: record.model,
@@ -840,6 +919,14 @@ function buildPermissionHandler(record: CompanionRecord): CanUseTool {
   return async (toolName, input, details): Promise<PermissionResult> => {
     if (disallowed.has(toolName)) {
       return deny(toolName, details.toolUseID, `Tool ${toolName} is disallowed by companion policy.`);
+    }
+
+    if (record.permissionPolicy === "bypass") {
+      return {
+        behavior: "allow",
+        updatedPermissions: details.suggestions,
+        toolUseID: details.toolUseID,
+      };
     }
 
     if (record.mode === "read-only" && MUTATING_TOOLS.has(toolName)) {
@@ -1062,6 +1149,10 @@ function stopRun(cwd: string, reason: string): void {
   handle.abortController.abort(new Error(reason));
   clearRunTimers(handle);
   running.delete(cwd);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function reconcileRecord(record: CompanionRecord): Promise<CompanionRecord> {

@@ -4,7 +4,7 @@ export type CompanionStatus = "idle" | "running" | "error" | "cancelled" | "stal
 
 export type CompanionBackend = "sdk" | "tui";
 
-export type PermissionPolicy = "balanced" | "trusted" | "strict";
+export type PermissionPolicy = "balanced" | "trusted" | "strict" | "bypass";
 
 export interface CompanionConfig {
   cwd: string;
@@ -110,4 +110,5 @@ export interface StartResult {
   status: "running";
   startedAt: string;
   deadlineAt?: string;
+  eventCursor?: number;
 }

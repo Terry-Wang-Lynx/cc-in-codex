@@ -42,6 +42,7 @@ export function ensureTuiSession(input: {
   cwd?: string;
   sessionId?: string;
   continueLatest?: boolean;
+  dangerouslySkipPermissions?: boolean;
   claudePath?: string;
   tmuxSessionName?: string;
 }): TuiSessionInfo {
@@ -60,7 +61,10 @@ export function ensureTuiSession(input: {
 
   const claude = input.claudePath ?? "claude";
   const launchMode = input.sessionId ? "resume" : input.continueLatest ? "continue" : "new";
-  const command = buildClaudeTuiCommand(claude, launchMode, input.sessionId);
+  const command = buildClaudeTuiCommand(claude, launchMode, {
+    sessionId: input.sessionId,
+    dangerouslySkipPermissions: input.dangerouslySkipPermissions,
+  });
 
   execFileSync("tmux", ["new-session", "-d", "-s", tmuxSessionName, "-c", cwd, command], {
     stdio: ["ignore", "pipe", "pipe"],
@@ -82,32 +86,19 @@ export function sendPromptToTui(input: {
   prompt: string;
   sessionId?: string;
   continueLatest?: boolean;
+  dangerouslySkipPermissions?: boolean;
   claudePath?: string;
   tmuxSessionName?: string;
 }): TuiSendResult {
   const session = ensureTuiSession(input);
-  const bufferName = `ccic-${randomUUID()}`;
 
   const clear = spawnSync("tmux", ["send-keys", "-t", session.tmuxSessionName, "C-u"]);
   assertSuccess(clear, "tmux send-keys C-u");
-
-  const load = spawnSync("tmux", ["load-buffer", "-b", bufferName, "-"], {
-    input: input.prompt,
-    encoding: "utf8",
-  });
-  assertSuccess(load, "tmux load-buffer");
-
-  const paste = spawnSync("tmux", ["paste-buffer", "-b", bufferName, "-t", session.tmuxSessionName]);
-  assertSuccess(paste, "tmux paste-buffer");
-
-  // Claude Code's TUI can take a moment to finish processing long pasted input.
-  // Sending Enter immediately after paste is flaky for longer prompts.
-  waitMs(150);
+  waitMs(50);
+  pasteText(session.tmuxSessionName, input.prompt);
 
   const enter = spawnSync("tmux", ["send-keys", "-t", session.tmuxSessionName, "C-m"]);
   assertSuccess(enter, "tmux send-keys Enter");
-
-  spawnSync("tmux", ["delete-buffer", "-b", bufferName]);
 
   return { ...session, runId: randomUUID(), sent: true };
 }
@@ -140,19 +131,12 @@ export function sendRawToTui(input: {
   }
 
   const hasText = typeof input.text === "string" && input.text.length > 0;
+  const text = hasText ? input.text! : "";
   const keys = input.keys ?? [];
   const enteredKeys: string[] = [];
 
   if (hasText) {
-    const bufferName = `ccic-${randomUUID()}`;
-    const load = spawnSync("tmux", ["load-buffer", "-b", bufferName, "-"], {
-      input: input.text,
-      encoding: "utf8",
-    });
-    assertSuccess(load, "tmux load-buffer");
-    const paste = spawnSync("tmux", ["paste-buffer", "-b", bufferName, "-t", tmuxSessionName]);
-    assertSuccess(paste, "tmux paste-buffer");
-    spawnSync("tmux", ["delete-buffer", "-b", bufferName]);
+    pasteText(tmuxSessionName, text);
   }
 
   for (const key of keys) {
@@ -164,7 +148,6 @@ export function sendRawToTui(input: {
   // Default to pressing Enter only for a plain text send with no explicit keys.
   const shouldEnter = input.enter ?? (hasText && keys.length === 0);
   if (shouldEnter) {
-    if (hasText) waitMs(150);
     const enter = spawnSync("tmux", ["send-keys", "-t", tmuxSessionName, "C-m"]);
     assertSuccess(enter, "tmux send-keys Enter");
     enteredKeys.push("C-m");
@@ -264,18 +247,45 @@ function hasTmuxSession(tmuxSessionName: string): boolean {
 function buildClaudeTuiCommand(
   claude: string,
   launchMode: TuiSessionInfo["launchMode"],
-  sessionId?: string,
+  options: {
+    sessionId?: string;
+    dangerouslySkipPermissions?: boolean;
+  },
 ): string {
+  const flags = options.dangerouslySkipPermissions ? " --dangerously-skip-permissions" : "";
   switch (launchMode) {
     case "resume":
-      if (!sessionId) throw new Error("sessionId is required for Claude Code --resume.");
-      return `${shellQuote(claude)} --resume ${shellQuote(sessionId)}`;
+      if (!options.sessionId) throw new Error("sessionId is required for Claude Code --resume.");
+      return `${shellQuote(claude)} --resume ${shellQuote(options.sessionId)}${flags}`;
     case "continue":
-      return `${shellQuote(claude)} --continue`;
+      return `${shellQuote(claude)} --continue${flags}`;
     case "new":
     case "existing":
-      return shellQuote(claude);
+      return `${shellQuote(claude)}${flags}`;
   }
+}
+
+function pasteText(tmuxSessionName: string, text: string): void {
+  const bufferName = `ccic-${randomUUID()}`;
+  const load = spawnSync("tmux", ["load-buffer", "-b", bufferName, "-"], {
+    input: text,
+    encoding: "utf8",
+  });
+  assertSuccess(load, "tmux load-buffer");
+
+  const paste = spawnSync("tmux", ["paste-buffer", "-b", bufferName, "-t", tmuxSessionName]);
+  assertSuccess(paste, "tmux paste-buffer");
+  spawnSync("tmux", ["delete-buffer", "-b", bufferName]);
+
+  // Claude Code's TUI processes bracketed paste asynchronously. Long prompts and slash commands
+  // need a longer settle time before Enter, otherwise Enter can arrive while paste is still landing.
+  waitMs(enterDelayMs(text));
+}
+
+function enterDelayMs(text: string): number {
+  const bytes = Buffer.byteLength(text, "utf8");
+  const lines = text.split("\n").length;
+  return Math.min(2500, 180 + Math.ceil(bytes / 120) + lines * 20);
 }
 
 function assertSuccess(result: ReturnType<typeof spawnSync>, label: string): void {
